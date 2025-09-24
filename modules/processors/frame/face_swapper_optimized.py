@@ -239,6 +239,11 @@ def process_frame_optimized(source_face: Face, temp_frame: Frame) -> Frame:
     return temp_frame
 
 
+def process_frame(source_face: Face, temp_frame: Frame) -> Frame:
+    """Process single frame (standard interface)"""
+    return process_frame_optimized(source_face, temp_frame)
+
+
 def process_frames_optimized(source_path: str, temp_frame_paths: List[str],
                             progress: Any = None) -> None:
     """Process frames with batching and optimizations"""
@@ -303,8 +308,8 @@ def process_frames_optimized(source_path: str, temp_frame_paths: List[str],
               f"Frame time: {metrics.frame_time:.1f}ms")
 
 
-def process_video_optimized(source_path: str, temp_frame_paths: List[str]) -> None:
-    """Process video with optimizations"""
+def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
+    """Process video with optimizations (standard interface)"""
     update_status('Processing with optimizations...', NAME)
 
     # Use optimized frame processing
@@ -321,3 +326,47 @@ def process_video_optimized(source_path: str, temp_frame_paths: List[str]) -> No
             f'{metrics.processed_frames} frames processed',
             NAME
         )
+
+
+def process_video_optimized(source_path: str, temp_frame_paths: List[str]) -> None:
+    """Process video with optimizations (legacy method)"""
+    process_video(source_path, temp_frame_paths)
+
+
+def pre_check() -> bool:
+    """Pre-check for optimized face swapper"""
+    abs_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(abs_dir))), "models"
+    )
+
+    # Check if model file exists
+    model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
+    if not os.path.exists(model_path):
+        update_status(f"Model not found: {model_path}", NAME)
+        return False
+
+    return True
+
+
+def pre_start() -> bool:
+    """Pre-start checks for optimized face swapper"""
+    if not modules.globals.map_faces and not is_image(modules.globals.source_path):
+        update_status("Select an image for source path.", NAME)
+        return False
+    elif not modules.globals.map_faces and modules.globals.source_path:
+        try:
+            import cv2
+            source_face = get_one_face(cv2.imread(modules.globals.source_path))
+            if not source_face:
+                update_status("No face in source path detected.", NAME)
+                return False
+        except Exception as e:
+            update_status(f"Error processing source image: {e}", NAME)
+            return False
+
+    if not is_image(modules.globals.target_path) and not is_video(modules.globals.target_path):
+        update_status("Select an image or video for target path.", NAME)
+        return False
+
+    return True

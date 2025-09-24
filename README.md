@@ -74,14 +74,29 @@ mkdir -p models
 # Activate virtual environment
 source venv/bin/activate
 
-# Run with maximum performance optimizations
+# RECOMMENDED: Simple M3 optimized version
+python run_m3_optimized.py
+
+# Advanced: Full optimization suite (requires all dependencies)
 python run_optimized.py --use-optimized --enable-monitoring
 
 # For live camera with performance monitoring
-python run_optimized.py --use-optimized --enable-monitoring --batch-size 4
+python run_m3_optimized.py --batch-size 4
 
 # Process video with optimizations
-python run_optimized.py -s face.jpg -t input.mp4 -o output.mp4 --use-optimized --batch-size 6
+python run_m3_optimized.py -s face.jpg -t input.mp4 -o output.mp4
+```
+
+### Troubleshooting
+
+If you encounter issues like "Frame processor not found" or the app gets stuck, see the **[Troubleshooting Guide](TROUBLESHOOTING.md)** or use:
+
+```bash
+# Debug any issues
+python debug_issue.py
+
+# Fallback command that always works
+python run_m3_optimized.py
 ```
 
 ## 🔧 Performance Configuration
@@ -90,7 +105,7 @@ python run_optimized.py -s face.jpg -t input.mp4 -o output.mp4 --use-optimized -
 
 #### Performance Mode (Maximum FPS)
 ```bash
-python run_optimized.py --use-optimized --batch-size 8 --video-quality 25
+python run_m3_optimized.py --batch-size 8 --video-quality 25
 ```
 - Resolution: 640×480
 - Target: 60 FPS
@@ -98,7 +113,7 @@ python run_optimized.py --use-optimized --batch-size 8 --video-quality 25
 
 #### Balanced Mode (Recommended)
 ```bash
-python run_optimized.py --use-optimized --batch-size 4 --video-quality 20
+python run_m3_optimized.py --batch-size 4 --video-quality 20
 ```
 - Resolution: 960×540
 - Target: 30 FPS
@@ -106,7 +121,7 @@ python run_optimized.py --use-optimized --batch-size 4 --video-quality 20
 
 #### Quality Mode (Best Visual)
 ```bash
-python run_optimized.py --use-optimized --batch-size 2 --video-quality 15
+python run_m3_optimized.py --batch-size 2 --video-quality 15
 ```
 - Resolution: 1280×720
 - Target: 24 FPS
@@ -116,16 +131,16 @@ python run_optimized.py --use-optimized --batch-size 2 --video-quality 15
 
 ```bash
 # Custom batch size (2-8 recommended for M3)
-python run_optimized.py --batch-size 6
+python run_m3_optimized.py --batch-size 6
 
 # Hardware-accelerated video encoding
-python run_optimized.py --video-encoder hevc_videotoolbox
+python run_m3_optimized.py --video-encoder hevc_videotoolbox
 
 # Memory limit (8GB recommended for M3 base)
-python run_optimized.py --max-memory 8
+python run_m3_optimized.py --max-memory 8
 
-# Execution providers (automatic detection)
-python run_optimized.py --execution-provider coreml cpu
+# Execution providers (CoreML automatic on Apple Silicon)
+python run_m3_optimized.py --execution-provider coreml cpu
 ```
 
 ## 📊 Performance Monitoring & Benchmarking
@@ -423,16 +438,16 @@ numpy>=1.23.5,<2               # Numerical computing
 After installation, run this quick test to verify >20 FPS capability:
 
 ```bash
-# 1. Test installation
-python test_optimization.py
+# 1. Test installation and debug any issues
+python debug_issue.py
 
-# 2. Run benchmark
+# 2. Run the simple optimized version
+python run_m3_optimized.py
+
+# 3. For benchmarking (requires all dependencies):
 python benchmark_performance.py --resolution 720p
 
-# 3. Check for >20 FPS result
-# Look for: "✅ TARGET ACHIEVED: XX.X FPS (target: 20 FPS)"
-
-# 4. Launch optimized app
+# 4. Advanced version (if all dependencies installed):
 python run_optimized.py --use-optimized --enable-monitoring
 ```
 

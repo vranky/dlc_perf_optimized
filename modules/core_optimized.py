@@ -75,7 +75,7 @@ def parse_args() -> None:
 
     # Frame processors
     program.add_argument('--frame-processor', help='pipeline of frame processors',
-                        dest='frame_processor', default=['face_swapper_optimized'],
+                        dest='frame_processor', default=['face_swapper'],
                         choices=['face_swapper', 'face_swapper_optimized', 'face_enhancer'],
                         nargs='+')
 
@@ -147,10 +147,16 @@ def apply_args(args) -> None:
         args.output_path
     )
 
-    # Use optimized processor by default
-    if args.use_optimized and 'face_swapper' in args.frame_processor:
-        # Replace with optimized version
-        modules.globals.frame_processors = ['face_swapper_optimized']
+    # Use optimized processor when requested
+    if args.use_optimized:
+        # Replace face_swapper with optimized version
+        optimized_processors = []
+        for processor in args.frame_processor:
+            if processor == 'face_swapper':
+                optimized_processors.append('face_swapper_optimized')
+            else:
+                optimized_processors.append(processor)
+        modules.globals.frame_processors = optimized_processors
     else:
         modules.globals.frame_processors = args.frame_processor
 

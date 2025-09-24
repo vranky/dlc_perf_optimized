@@ -26,7 +26,7 @@ from modules.utilities import (
     has_image_extension,
 )
 from modules.video_capture import VideoCapturer
-from modules.gettext import LanguageManager
+from modules.localization import LanguageManager
 import platform
 
 if platform.system() == "Windows":
