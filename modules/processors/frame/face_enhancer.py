@@ -8,7 +8,7 @@ import modules.globals
 import modules.processors.frame.core
 from modules.core import update_status
 from modules.face_analyser import get_one_face
-from modules.typing import Frame, Face
+from modules.face_types import Frame, Face
 import platform
 import torch
 from modules.utilities import (

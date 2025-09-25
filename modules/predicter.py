@@ -4,7 +4,7 @@ from PIL import Image
 import cv2  # Add OpenCV import
 import modules.globals  # Import globals to access the color correction toggle
 
-from modules.typing import Frame
+from modules.face_types import Frame
 
 MAX_PROBABILITY = 0.85
 

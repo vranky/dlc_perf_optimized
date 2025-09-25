@@ -14,6 +14,7 @@ tf_env/
 .tmp/
 temp/
 .venv/
+py310_dlc/
 venv/
 env/
 workflow/

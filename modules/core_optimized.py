@@ -259,17 +259,26 @@ def limit_resources() -> None:
     if modules.globals.max_memory:
         memory = modules.globals.max_memory * 1024 ** 3
 
-        if IS_APPLE_SILICON:
-            # Unified memory on Apple Silicon
-            memory = modules.globals.max_memory * 1024 ** 6
-
         if platform.system().lower() == 'windows':
             import ctypes
             kernel32 = ctypes.windll.kernel32
             kernel32.SetProcessWorkingSetSize(-1, ctypes.c_size_t(memory), ctypes.c_size_t(memory))
         else:
             import resource
-            resource.setrlimit(resource.RLIMIT_DATA, (memory, memory))
+            try:
+                # Get current limits to avoid exceeding maximum
+                soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_DATA)
+                
+                # Use the smaller of requested memory or hard limit
+                if hard_limit != resource.RLIM_INFINITY:
+                    memory = min(memory, hard_limit)
+                
+                resource.setrlimit(resource.RLIMIT_DATA, (memory, hard_limit))
+            except (OverflowError, OSError, ValueError):
+                # Skip memory limit if it fails - common on macOS with unified memory
+                if IS_APPLE_SILICON:
+                    update_status('Skipping memory limits on Apple Silicon unified memory system')
+                pass
 
 
 def release_resources() -> None:

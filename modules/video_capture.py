@@ -50,7 +50,29 @@ class VideoCapturer:
                         continue
             else:
                 # Unix-like systems (Linux/Mac) capture method
-                self.cap = cv2.VideoCapture(self.device_index)
+                if platform.system() == "Darwin":  # macOS
+                    # Try different backends for macOS cameras
+                    backends = [cv2.CAP_AVFOUNDATION, cv2.CAP_ANY]
+                    for backend in backends:
+                        try:
+                            self.cap = cv2.VideoCapture(self.device_index, backend)
+                            if self.cap.isOpened():
+                                # Force read a frame to ensure camera initialization
+                                ret, frame = self.cap.read()
+                                if ret and frame is not None:
+                                    print(f"✅ Camera {self.device_index} initialized successfully with backend {backend}")
+                                    break
+                                else:
+                                    print(f"❌ Camera {self.device_index} opened but can't read frames with backend {backend}")
+                                    self.cap.release()
+                            else:
+                                print(f"❌ Failed to open camera {self.device_index} with backend {backend}")
+                        except Exception as e:
+                            print(f"❌ Error with backend {backend}: {e}")
+                            continue
+                else:
+                    # Linux capture method
+                    self.cap = cv2.VideoCapture(self.device_index)
 
             if not self.cap or not self.cap.isOpened():
                 raise RuntimeError("Failed to open camera")
@@ -59,6 +81,12 @@ class VideoCapturer:
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             self.cap.set(cv2.CAP_PROP_FPS, fps)
+            
+            # On macOS, give camera time to initialize hardware
+            if platform.system() == "Darwin":
+                import time
+                time.sleep(0.5)  # 500ms delay for hardware initialization
+                print("Camera hardware initialization delay completed")
 
             self.is_running = True
             return True
