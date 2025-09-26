@@ -54,6 +54,12 @@ class OptimizedFaceSwapperModel:
         self.face_cache = {}  # Cache processed faces
         self.cache_lock = threading.Lock()
 
+        # CRITICAL OPTIMIZATION: Cache target face detection to avoid expensive face detection per frame
+        self.cached_target_face = None
+        self.face_detection_interval = 30  # Only detect face every N frames (increased for Mac M1)
+        self.frame_count = 0
+        self.last_face_detection_time = 0
+
         # Initialize thread pool for parallel processing
         self.executor = ThreadPoolExecutor(max_workers=4)
 
@@ -68,13 +74,31 @@ class OptimizedFaceSwapperModel:
         else:
             providers = modules.globals.execution_providers
 
+        # CRITICAL OPTIMIZATION: Add provider options for better performance on Mac M1
+        provider_options = {}
+        if 'CoreMLExecutionProvider' in providers:
+            provider_options['CoreMLExecutionProvider'] = {
+                'compute_units': 'CPU_AND_GPU',  # Use both CPU and GPU on M1
+                'model_format': 'MIL'  # Machine Learning Intermediate Language format
+            }
+        if 'CPUExecutionProvider' in providers:
+            provider_options['CPUExecutionProvider'] = {
+                'intra_op_num_threads': 8,  # Use 8 threads for M1 performance cores
+                'inter_op_num_threads': 4   # Limit inter-op threads
+            }
+
         self.model = insightface.model_zoo.get_model(
             self.model_path,
-            providers=providers
+            providers=providers,
+            provider_options=provider_options
         )
 
         # Pre-warm the model
         self._prewarm_model()
+        
+        print(f"[{NAME}] Model initialized with providers: {providers}")
+        if provider_options:
+            print(f"[{NAME}] Provider options: {provider_options}")
 
     def _prewarm_model(self):
         """Pre-warm the model with dummy data to optimize first inference"""
@@ -105,30 +129,13 @@ class OptimizedFaceSwapperModel:
         if ENABLE_FPS_MONITORING:
             self.fps_monitor.start_frame()
 
-        # Generate cache key
-        cache_key = self._generate_cache_key(source_face, target_face)
-
-        # Check cache for similar face swap
-        with self.cache_lock:
-            if cache_key in self.face_cache:
-                # Use cached transformation matrix
-                cached_data = self.face_cache[cache_key]
-                result = self._apply_cached_swap(frame, cached_data)
-            else:
-                # Perform face swap
-                result = self.model.get(frame, target_face, source_face,
-                                       paste_back=True)
-
-                # Cache the transformation data (simplified)
-                self.face_cache[cache_key] = {
-                    'timestamp': time.time(),
-                    'source_embedding': source_face.normed_embedding,
-                    'target_bbox': target_face.bbox
-                }
-
-                # Limit cache size
-                if len(self.face_cache) > 100:
-                    self._cleanup_cache()
+        try:
+            # OPTIMIZATION: Direct face swap without caching for better performance
+            # The caching was causing more overhead than benefit
+            result = self.model.get(frame, target_face, source_face, paste_back=True)
+        except Exception as e:
+            print(f"[{NAME}] Face swap error: {e}")
+            result = frame  # Return original frame on error
 
         if ENABLE_FPS_MONITORING:
             self.fps_monitor.end_frame()
@@ -175,6 +182,31 @@ class OptimizedFaceSwapperModel:
             results.append(future.result())
 
         return results
+
+    def get_cached_target_face(self, frame: Frame) -> Optional[Face]:
+        """Get cached target face or detect new one periodically"""
+        current_time = time.time()
+        self.frame_count += 1
+        
+        # Only run face detection every N frames or if no cached face
+        should_detect = (
+            self.cached_target_face is None or
+            self.frame_count % self.face_detection_interval == 0 or
+            current_time - self.last_face_detection_time > 2.0  # Re-detect every 2 seconds
+        )
+        
+        if should_detect:
+            try:
+                # Detect face in current frame
+                target_face = get_one_face(frame)
+                if target_face:
+                    self.cached_target_face = target_face
+                    self.last_face_detection_time = current_time
+                    print(f"[{NAME}] Updated target face cache (frame {self.frame_count})")
+            except Exception as e:
+                print(f"[{NAME}] Face detection error: {e}")
+        
+        return self.cached_target_face
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics"""
@@ -230,7 +262,8 @@ def process_frame_optimized(source_face: Face, temp_frame: Frame) -> Frame:
                             source_face, target_face, temp_frame
                         )
     else:
-        target_face = get_one_face(temp_frame)
+        # CRITICAL OPTIMIZATION: Cache target face detection
+        target_face = swapper.get_cached_target_face(temp_frame)
         if target_face and source_face:
             temp_frame = swapper.swap_face_optimized(
                 source_face, target_face, temp_frame

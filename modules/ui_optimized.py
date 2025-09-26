@@ -17,10 +17,29 @@ import queue
 import modules.globals
 from modules.performance_optimizer import FPSMonitor, PerformanceMetrics
 from modules.video_capture import VideoCapturer
-from modules.processors.frame.face_swapper_optimized import (
-    get_optimized_face_swapper,
-    process_frame_optimized
-)
+try:
+    # Try to use ultra-optimized version first
+    from modules.optimized_face_swapper_v2 import (
+        get_face_swapper,
+        process_frame_ultra_optimized
+    )
+    
+    # Test if it initializes correctly
+    try:
+        test_swapper = get_face_swapper()
+        print("✅ Using ultra-optimized face swapper v2")
+        process_frame_optimized = process_frame_ultra_optimized
+    except Exception as e:
+        print(f"❌ Ultra-optimized face swapper failed: {e}")
+        raise ImportError("Ultra-optimized version failed to initialize")
+        
+except (ImportError, Exception) as e:
+    print(f"⚠️ Falling back to standard optimized face swapper: {e}")
+    # Fallback to original optimized version
+    from modules.processors.frame.face_swapper_optimized import (
+        get_optimized_face_swapper as get_face_swapper,
+        process_frame_optimized
+    )
 from modules.face_analyser import get_one_face
 from modules.utilities import is_image, is_video
 from PIL import ImageOps
@@ -103,6 +122,14 @@ class OptimizedPreviewWindow:
             font=("Arial", 12)
         )
         self.frames_label.pack(side=tk.LEFT, padx=10)
+        
+        # Memory usage display
+        self.memory_label = ctk.CTkLabel(
+            self.metrics_frame,
+            text="Memory: 0MB",
+            font=("Arial", 12)
+        )
+        self.memory_label.pack(side=tk.LEFT, padx=10)
 
         # Control buttons
         self.control_frame = ctk.CTkFrame(self.main_frame)
@@ -132,7 +159,7 @@ class OptimizedPreviewWindow:
             text="Quality:"
         ).pack(side=tk.LEFT, padx=5)
 
-        self.quality_var = tk.StringVar(value="balanced")
+        self.quality_var = tk.StringVar(value="performance")  # Default to performance mode for Mac M1
         self.quality_menu = ctk.CTkOptionMenu(
             self.quality_frame,
             values=["performance", "balanced", "quality"],
@@ -248,8 +275,24 @@ class OptimizedPreviewWindow:
                 # Apply face swapping if source face is available
                 if self.source_face is not None:
                     try:
-                        processed_frame = process_frame_optimized(self.source_face, frame)
-                        self.display_frame(processed_frame)
+                        # PERFORMANCE OPTIMIZATION: Use fast face swapping for real-time performance
+                        try:
+                            # Import fast face swapper
+                            from modules.fast_face_swapper import process_frame_fast
+                            
+                            # Get source image if available
+                            source_image = None
+                            if modules.globals.source_path:
+                                source_image = cv2.imread(modules.globals.source_path)
+                            
+                            # Process with fast swapper
+                            processed_frame = process_frame_fast(self.source_face, frame, source_image)
+                            self.display_frame(processed_frame)
+                            
+                        except ImportError:
+                            # Fallback to regular optimized processing
+                            processed_frame = process_frame_optimized(self.source_face, frame)
+                            self.display_frame(processed_frame)
                     except Exception as e:
                         print(f"Face swap error: {e}")
                         # Fall back to raw frame
@@ -290,9 +333,20 @@ class OptimizedPreviewWindow:
         except Exception as e:
             print(f"Error in simple_capture_test: {e}")
         
-        # Schedule next capture
+        # Schedule next capture with adaptive timing
         if self.is_running:
-            self.parent.after(33, self.simple_capture_test)  # ~30fps
+            # Adaptive frame timing based on performance
+            if hasattr(self, 'display_fps'):
+                if self.display_fps < 5:
+                    delay = 100  # 10fps when struggling
+                elif self.display_fps < 15:
+                    delay = 66   # 15fps when moderate
+                else:
+                    delay = 33   # 30fps when good
+            else:
+                delay = 50  # Default 20fps
+                
+            self.parent.after(delay, self.simple_capture_test)
     
     def recover_camera(self):
         """Attempt to recover camera connection"""
@@ -419,12 +473,20 @@ class OptimizedPreviewWindow:
             height, width = frame_rgb.shape[:2]
             ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=(width, height))
 
-            # Update label using CTkImage directly and force UI update
-            self.video_label.configure(image=ctk_image, text="")
-            self.video_label.image = ctk_image  # Keep reference
+            # Update label using CTkImage in main thread
+            def update_display():
+                try:
+                    self.video_label.configure(image=ctk_image, text="")
+                    self.video_label.image = ctk_image  # Keep reference
+                except Exception as e:
+                    print(f"Display update error: {e}")
             
-            # Force immediate UI update - this is crucial for CustomTkinter display
-            self.parent.update()
+            # Schedule UI update in main thread
+            try:
+                self.parent.after_idle(update_display)
+            except Exception as e:
+                # Fallback: direct update (might cause threading issues)
+                update_display()
 
         except Exception as e:
             print(f"Error displaying frame: {e}")
@@ -472,20 +534,29 @@ class OptimizedPreviewWindow:
         self.frames_label.configure(
             text=f"Frames: {self.frame_count}"
         )
+        
+        # Update memory usage if available
+        try:
+            swapper = get_face_swapper()
+            metrics = swapper.get_metrics()
+            memory_text = f"Memory: {metrics.memory_mb:.1f}MB"
+            self.memory_label.configure(text=memory_text)
+        except Exception:
+            self.memory_label.configure(text="Memory: N/A")
 
     def get_quality_settings(self) -> Tuple[int, int, int]:
         """Get resolution and FPS based on quality setting"""
         quality = self.quality_var.get()
 
         if quality == "performance":
-            # Lower resolution for better performance
-            return 640, 480, 60
+            # Lower resolution for better performance on Mac M1
+            return 480, 360, 30  # Reduced resolution for better face swapping FPS
         elif quality == "balanced":
             # Balanced settings
-            return 960, 540, 30
+            return 640, 480, 30  # Reduced from 960x540 for better performance
         else:  # quality
             # Higher quality
-            return 1280, 720, 30
+            return 960, 540, 30  # Reduced from 1280x720 for better performance
 
     def on_quality_changed(self, choice):
         """Handle quality setting change"""
