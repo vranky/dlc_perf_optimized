@@ -158,55 +158,120 @@ class AppleSiliconOptimizer:
         }
 
     def get_batch_size_recommendation(self) -> int:
-        """Recommend batch size based on hardware"""
-        if self.specs.unified_memory_gb >= 32:
-            return 8
-        elif self.specs.unified_memory_gb >= 16:
-            return 6
-        elif self.specs.unified_memory_gb >= 8:
-            return 4
+        """Recommend batch size based on hardware with M1 optimization"""
+        # M1-specific: Lower batch sizes due to lower compute and memory bandwidth
+        is_m1 = "M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+
+        if is_m1:
+            # M1 optimized batch sizes (more conservative)
+            if self.specs.unified_memory_gb >= 16:
+                return 3  # Reduced from 6
+            elif self.specs.unified_memory_gb >= 8:
+                return 2  # Reduced from 4 (M1 base model)
+            else:
+                return 1
         else:
-            return 2
+            # M2/M3 batch sizes (original)
+            if self.specs.unified_memory_gb >= 32:
+                return 8
+            elif self.specs.unified_memory_gb >= 16:
+                return 6
+            elif self.specs.unified_memory_gb >= 8:
+                return 4
+            else:
+                return 2
 
     def get_frame_buffer_size(self) -> int:
-        """Recommend frame buffer size"""
-        if self.specs.unified_memory_gb >= 32:
-            return 20
-        elif self.specs.unified_memory_gb >= 16:
-            return 15
-        elif self.specs.unified_memory_gb >= 8:
-            return 10
+        """Recommend frame buffer size with M1 optimization"""
+        # M1-specific: Smaller buffer pools for better cache locality
+        is_m1 = "M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+
+        if is_m1:
+            # M1 optimized buffer sizes (smaller for cache efficiency)
+            if self.specs.unified_memory_gb >= 16:
+                return 8  # Reduced from 15
+            elif self.specs.unified_memory_gb >= 8:
+                return 5  # Reduced from 10 (M1 base model)
+            else:
+                return 3
         else:
-            return 5
+            # M2/M3 buffer sizes (original)
+            if self.specs.unified_memory_gb >= 32:
+                return 20
+            elif self.specs.unified_memory_gb >= 16:
+                return 15
+            elif self.specs.unified_memory_gb >= 8:
+                return 10
+            else:
+                return 5
 
     def get_quality_settings(self) -> dict:
-        """Get recommended quality settings"""
-        base_settings = {
-            "performance": {
-                "resolution": (640, 480),
-                "fps_target": 60,
-                "quality": 23,
-                "encoder": "hevc_videotoolbox"
-            },
-            "balanced": {
-                "resolution": (960, 540),
-                "fps_target": 30,
-                "quality": 20,
-                "encoder": "hevc_videotoolbox"
-            },
-            "quality": {
-                "resolution": (1280, 720),
-                "fps_target": 24,
-                "quality": 18,
-                "encoder": "hevc_videotoolbox"
-            }
-        }
+        """Get recommended quality settings with M1-specific optimization"""
 
-        # Adjust for M3 Pro/Max
-        if "Pro" in self.specs.model or "Max" in self.specs.model:
-            base_settings["performance"]["fps_target"] = 120
-            base_settings["balanced"]["fps_target"] = 60
-            base_settings["quality"]["resolution"] = (1920, 1080)
+        # OPTIMIZATION 1.2: M1-specific resolution tuning
+        # Detect M1 vs M2/M3
+        is_m1 = "M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+
+        if is_m1:
+            # M1-optimized settings: Lower resolution for 20 FPS target
+            base_settings = {
+                "performance": {
+                    "resolution": (640, 480),  # 640×480 (307K pixels, -41% vs 960×540)
+                    "fps_target": 25,          # Realistic target for M1
+                    "quality": 25,
+                    "encoder": "hevc_videotoolbox",
+                    "description": "Maximum FPS mode for M1"
+                },
+                "balanced": {
+                    "resolution": (720, 540),  # 720×540 (389K pixels, -25% vs 960×540)
+                    "fps_target": 20,          # 20 FPS TARGET for M1
+                    "quality": 23,
+                    "encoder": "hevc_videotoolbox",
+                    "description": "Recommended for M1 - 20 FPS target"
+                },
+                "quality": {
+                    "resolution": (960, 720),  # 960×720 (691K pixels)
+                    "fps_target": 15,          # Lower target for quality
+                    "quality": 20,
+                    "encoder": "hevc_videotoolbox",
+                    "description": "Best quality mode for M1"
+                }
+            }
+            print(f"[AppleSiliconConfig] M1 detected: Using optimized resolution presets")
+            print(f"  - Performance: 640×480 @ 25 FPS target")
+            print(f"  - Balanced:    720×540 @ 20 FPS target (RECOMMENDED)")
+            print(f"  - Quality:     960×720 @ 15 FPS target")
+        else:
+            # M2/M3 settings: Keep original higher resolutions
+            base_settings = {
+                "performance": {
+                    "resolution": (640, 480),
+                    "fps_target": 60,
+                    "quality": 23,
+                    "encoder": "hevc_videotoolbox",
+                    "description": "Maximum FPS mode"
+                },
+                "balanced": {
+                    "resolution": (960, 540),
+                    "fps_target": 30,
+                    "quality": 20,
+                    "encoder": "hevc_videotoolbox",
+                    "description": "Recommended general use"
+                },
+                "quality": {
+                    "resolution": (1280, 720),
+                    "fps_target": 24,
+                    "quality": 18,
+                    "encoder": "hevc_videotoolbox",
+                    "description": "Best quality mode"
+                }
+            }
+
+            # Adjust for M3 Pro/Max
+            if "Pro" in self.specs.model or "Max" in self.specs.model:
+                base_settings["performance"]["fps_target"] = 120
+                base_settings["balanced"]["fps_target"] = 60
+                base_settings["quality"]["resolution"] = (1920, 1080)
 
         return base_settings
 

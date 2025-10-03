@@ -24,9 +24,11 @@ from modules.performance_optimizer import (
     FrameBufferPool,
     AppleSiliconOptimizer,
     BatchProcessor,
-    PerformanceMetrics
+    PerformanceMetrics,
+    AdaptiveFrameSkipper
 )
 import os
+import subprocess
 
 # Thread-safe face swapper instance
 FACE_SWAPPER = None
@@ -43,6 +45,22 @@ FRAME_BUFFER_SIZE = 10
 ENABLE_FPS_MONITORING = True
 
 
+def _detect_m1_chip() -> bool:
+    """Detect if running on M1 chip specifically"""
+    if not IS_APPLE_SILICON:
+        return False
+    try:
+        result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'],
+                              capture_output=True, text=True, timeout=1)
+        brand = result.stdout.strip()
+        # M1 detection: contains "M1" but not "M2" or "M3"
+        return 'M1' in brand and 'M2' not in brand and 'M3' not in brand
+    except:
+        return False
+
+IS_M1_CHIP = _detect_m1_chip()
+
+
 class OptimizedFaceSwapperModel:
     """Optimized face swapper model with caching and batching"""
 
@@ -56,36 +74,79 @@ class OptimizedFaceSwapperModel:
 
         # CRITICAL OPTIMIZATION: Cache target face detection to avoid expensive face detection per frame
         self.cached_target_face = None
-        self.face_detection_interval = 30  # Only detect face every N frames (increased for Mac M1)
+
+        # M1-specific tuning: Aggressive caching for lower compute capability
+        if IS_M1_CHIP:
+            self.face_detection_interval = 90  # 3x more caching for M1 (every 90 frames)
+            self.face_cache_timeout = 5.0  # Extend cache timeout to 5 seconds
+            max_workers = 2  # Reduce thread pool for M1's 4 performance cores
+            print(f"[{NAME}] M1 detected: Using aggressive caching (interval=90, timeout=5s)")
+        else:
+            self.face_detection_interval = 30  # Keep M3 settings
+            self.face_cache_timeout = 2.0  # Standard 2 second timeout
+            max_workers = 4
+            print(f"[{NAME}] M3/M2 detected: Using standard caching (interval=30, timeout=2s)")
+
         self.frame_count = 0
         self.last_face_detection_time = 0
 
-        # Initialize thread pool for parallel processing
-        self.executor = ThreadPoolExecutor(max_workers=4)
+        # Motion detection for intelligent cache invalidation
+        self.motion_threshold = 50  # Pixel difference threshold
+        self.last_frame_for_motion = None
+        self.motion_detection_enabled = True
+
+        # Initialize thread pool for parallel processing (M1-optimized)
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        print(f"[{NAME}] Thread pool initialized with {max_workers} workers")
 
         # Batch processing queue
         self.batch_queue = queue.Queue(maxsize=BATCH_SIZE * 2)
         self.result_queue = queue.Queue(maxsize=BATCH_SIZE * 2)
 
+        # OPTIMIZATION 2.1: Adaptive frame skipping for M1
+        if IS_M1_CHIP:
+            # Enable frame skipping on M1 to maintain 20 FPS target
+            self.frame_skipper = AdaptiveFrameSkipper(target_fps=20.0, enable_interpolation=True)
+            print(f"[{NAME}] Adaptive frame skipping enabled (target: 20 FPS)")
+        else:
+            # Disable on M3 (has enough power)
+            self.frame_skipper = None
+
     def initialize(self):
-        """Initialize the face swapper model with optimizations"""
+        """Initialize the face swapper model with M1-optimized settings"""
         if IS_APPLE_SILICON:
             providers = AppleSiliconOptimizer.get_optimal_providers()
         else:
             providers = modules.globals.execution_providers
 
-        # CRITICAL OPTIMIZATION: Add provider options for better performance on Mac M1
+        # OPTIMIZATION 1.3: M1-specific CoreML + Neural Engine settings
         provider_options = {}
+
         if 'CoreMLExecutionProvider' in providers:
-            provider_options['CoreMLExecutionProvider'] = {
-                'compute_units': 'CPU_AND_GPU',  # Use both CPU and GPU on M1
-                'model_format': 'MIL'  # Machine Learning Intermediate Language format
-            }
+            if IS_M1_CHIP:
+                # M1-optimized: Force Neural Engine usage for AI inference
+                provider_options['CoreMLExecutionProvider'] = {
+                    'compute_units': 'CPU_AND_NE',  # Use Neural Engine explicitly (11 TOPS on M1)
+                    'model_format': 'MIL',  # Machine Learning Intermediate Language format
+                    'allow_low_precision': True,  # Enable FP16 optimization for faster inference
+                    'enable_on_subgraph': False,  # Disable subgraph for faster initialization
+                }
+                print(f"[{NAME}] M1 Neural Engine optimization enabled (11 TOPS)")
+            else:
+                # M3 settings: Use GPU + Neural Engine
+                provider_options['CoreMLExecutionProvider'] = {
+                    'compute_units': 'CPU_AND_GPU',  # M3 has more GPU cores
+                    'model_format': 'MIL'
+                }
+
         if 'CPUExecutionProvider' in providers:
+            # OPTIMIZATION 1.4: Reduce thread count for M1
+            thread_count = 4 if IS_M1_CHIP else 8
             provider_options['CPUExecutionProvider'] = {
-                'intra_op_num_threads': 8,  # Use 8 threads for M1 performance cores
-                'inter_op_num_threads': 4   # Limit inter-op threads
+                'intra_op_num_threads': thread_count,
+                'inter_op_num_threads': max(1, thread_count // 2)
             }
+            print(f"[{NAME}] CPU threads: intra={thread_count}, inter={thread_count // 2}")
 
         self.model = insightface.model_zoo.get_model(
             self.model_path,
@@ -93,18 +154,19 @@ class OptimizedFaceSwapperModel:
             provider_options=provider_options
         )
 
-        # Pre-warm the model
-        self._prewarm_model()
-        
+        # Pre-warm the model with M1-appropriate size
+        self._prewarm_model(is_m1=IS_M1_CHIP)
+
         print(f"[{NAME}] Model initialized with providers: {providers}")
         if provider_options:
             print(f"[{NAME}] Provider options: {provider_options}")
 
-    def _prewarm_model(self):
-        """Pre-warm the model with dummy data to optimize first inference"""
+    def _prewarm_model(self, is_m1: bool = False):
+        """Pre-warm the model with appropriate resolution for chip"""
         try:
-            # Create dummy face data
-            dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
+            # Use smaller pre-warm size for M1 to match runtime resolution
+            size = 512 if is_m1 else 640
+            dummy_img = np.zeros((size, size, 3), dtype=np.uint8)
             dummy_face = type('obj', (object,), {
                 'bbox': np.array([100, 100, 200, 200]),
                 'kps': np.random.rand(5, 2) * 100,
@@ -184,17 +246,13 @@ class OptimizedFaceSwapperModel:
         return results
 
     def get_cached_target_face(self, frame: Frame) -> Optional[Face]:
-        """Get cached target face or detect new one periodically"""
+        """Get cached target face with motion-based intelligent re-detection"""
         current_time = time.time()
         self.frame_count += 1
-        
-        # Only run face detection every N frames or if no cached face
-        should_detect = (
-            self.cached_target_face is None or
-            self.frame_count % self.face_detection_interval == 0 or
-            current_time - self.last_face_detection_time > 2.0  # Re-detect every 2 seconds
-        )
-        
+
+        # Check if we should detect based on multiple criteria
+        should_detect = self._should_detect_face(frame, current_time)
+
         if should_detect:
             try:
                 # Detect face in current frame
@@ -203,10 +261,59 @@ class OptimizedFaceSwapperModel:
                     self.cached_target_face = target_face
                     self.last_face_detection_time = current_time
                     print(f"[{NAME}] Updated target face cache (frame {self.frame_count})")
+
+                # Update motion detection reference
+                if self.motion_detection_enabled:
+                    self.last_frame_for_motion = self._downsample_for_motion(frame)
             except Exception as e:
                 print(f"[{NAME}] Face detection error: {e}")
-        
+
         return self.cached_target_face
+
+    def _should_detect_face(self, frame: Frame, current_time: float) -> bool:
+        """Determine if face detection should run based on multiple factors"""
+        # Always detect if no cached face
+        if self.cached_target_face is None:
+            return True
+
+        # Check if cache timeout expired
+        if current_time - self.last_face_detection_time > self.face_cache_timeout:
+            return True
+
+        # Check frame interval
+        interval_triggered = self.frame_count % self.face_detection_interval == 0
+
+        # Motion detection: check if subject moved significantly
+        motion_triggered = False
+        if self.motion_detection_enabled and self.last_frame_for_motion is not None:
+            motion_triggered = self._detect_significant_motion(frame)
+
+        return interval_triggered or motion_triggered
+
+    def _downsample_for_motion(self, frame: Frame) -> np.ndarray:
+        """Downsample frame for efficient motion detection"""
+        # Reduce to 160x120 for motion detection (12x smaller)
+        small_frame = cv2.resize(frame, (160, 120))
+        return cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+
+    def _detect_significant_motion(self, frame: Frame) -> bool:
+        """Detect if there's significant motion requiring face re-detection"""
+        try:
+            # Downsample current frame
+            current_small = self._downsample_for_motion(frame)
+
+            # Compute mean absolute difference
+            motion = np.mean(np.abs(current_small.astype(np.float32) -
+                                   self.last_frame_for_motion.astype(np.float32)))
+
+            if motion > self.motion_threshold:
+                print(f"[{NAME}] Motion detected ({motion:.1f} > {self.motion_threshold}), re-detecting face")
+                return True
+
+            return False
+        except Exception as e:
+            # If motion detection fails, don't trigger re-detection
+            return False
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics"""
@@ -241,9 +348,45 @@ def get_optimized_face_swapper() -> OptimizedFaceSwapperModel:
 
 
 def process_frame_optimized(source_face: Face, temp_frame: Frame) -> Frame:
-    """Process single frame with optimizations"""
+    """Process single frame with optimizations including adaptive frame skipping"""
     swapper = get_optimized_face_swapper()
 
+    # OPTIMIZATION 2.1: Adaptive frame skipping for M1
+    if swapper.frame_skipper is not None:
+        swapper.frame_skipper.start_frame_timing()
+
+        # Check if we should process this frame
+        should_process = swapper.frame_skipper.should_process_frame()
+
+        if not should_process:
+            # Skip processing, use interpolation from last frame
+            if swapper.frame_skipper.last_processed_frame is not None:
+                interpolated = swapper.frame_skipper.interpolate_frame(
+                    swapper.frame_skipper.last_processed_frame,
+                    temp_frame
+                )
+                swapper.frame_skipper.end_frame_timing()
+                return interpolated
+            # If no last frame, process anyway
+            should_process = True
+
+        if should_process:
+            # Process frame normally
+            result_frame = _process_frame_full(swapper, source_face, temp_frame)
+
+            # Store for interpolation
+            swapper.frame_skipper.update_last_processed(result_frame)
+            swapper.frame_skipper.end_frame_timing()
+
+            return result_frame
+    else:
+        # No frame skipping (M3 or disabled)
+        return _process_frame_full(swapper, source_face, temp_frame)
+
+
+def _process_frame_full(swapper: OptimizedFaceSwapperModel,
+                       source_face: Face, temp_frame: Frame) -> Frame:
+    """Full frame processing without skipping"""
     if modules.globals.many_faces:
         many_faces = get_many_faces(temp_frame)
         if many_faces:
