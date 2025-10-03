@@ -46,19 +46,23 @@ ENABLE_FPS_MONITORING = True
 
 
 def _detect_m1_chip() -> bool:
-    """Detect if running on M1 chip specifically"""
+    """Detect if running on M1 BASE chip specifically (not Pro/Max/Ultra)"""
     if not IS_APPLE_SILICON:
         return False
     try:
         result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'],
                               capture_output=True, text=True, timeout=1)
         brand = result.stdout.strip()
-        # M1 detection: contains "M1" but not "M2" or "M3"
-        return 'M1' in brand and 'M2' not in brand and 'M3' not in brand
+
+        # M1 BASE detection: contains "M1" but NOT "M2", "M3", "Pro", "Max", or "Ultra"
+        is_m1_family = 'M1' in brand and 'M2' not in brand and 'M3' not in brand
+        is_base_variant = 'Pro' not in brand and 'Max' not in brand and 'Ultra' not in brand
+
+        return is_m1_family and is_base_variant
     except:
         return False
 
-IS_M1_CHIP = _detect_m1_chip()
+IS_M1_CHIP = _detect_m1_chip()  # Will be False for M1 Pro/Max/Ultra
 
 
 class OptimizedFaceSwapperModel:

@@ -158,11 +158,13 @@ class AppleSiliconOptimizer:
         }
 
     def get_batch_size_recommendation(self) -> int:
-        """Recommend batch size based on hardware with M1 optimization"""
-        # M1-specific: Lower batch sizes due to lower compute and memory bandwidth
-        is_m1 = "M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+        """Recommend batch size based on hardware with M1 BASE optimization"""
+        # M1 BASE-specific: Lower batch sizes due to lower compute and memory bandwidth
+        # Exclude M1 Pro/Max/Ultra which should use standard settings
+        is_m1_base = ("M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+                      and "Pro" not in self.specs.model and "Max" not in self.specs.model and "Ultra" not in self.specs.model)
 
-        if is_m1:
+        if is_m1_base:
             # M1 optimized batch sizes (more conservative)
             if self.specs.unified_memory_gb >= 16:
                 return 3  # Reduced from 6
@@ -182,11 +184,13 @@ class AppleSiliconOptimizer:
                 return 2
 
     def get_frame_buffer_size(self) -> int:
-        """Recommend frame buffer size with M1 optimization"""
-        # M1-specific: Smaller buffer pools for better cache locality
-        is_m1 = "M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+        """Recommend frame buffer size with M1 BASE optimization"""
+        # M1 BASE-specific: Smaller buffer pools for better cache locality
+        # Exclude M1 Pro/Max/Ultra which should use standard settings
+        is_m1_base = ("M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+                      and "Pro" not in self.specs.model and "Max" not in self.specs.model and "Ultra" not in self.specs.model)
 
-        if is_m1:
+        if is_m1_base:
             # M1 optimized buffer sizes (smaller for cache efficiency)
             if self.specs.unified_memory_gb >= 16:
                 return 8  # Reduced from 15
@@ -206,13 +210,15 @@ class AppleSiliconOptimizer:
                 return 5
 
     def get_quality_settings(self) -> dict:
-        """Get recommended quality settings with M1-specific optimization"""
+        """Get recommended quality settings with M1 BASE-specific optimization"""
 
-        # OPTIMIZATION 1.2: M1-specific resolution tuning
-        # Detect M1 vs M2/M3
-        is_m1 = "M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+        # OPTIMIZATION 1.2: M1 BASE-specific resolution tuning
+        # Detect M1 BASE vs M2/M3/M1 Pro/Max/Ultra
+        # Exclude M1 Pro/Max/Ultra which should use standard settings
+        is_m1_base = ("M1" in self.specs.model and "M2" not in self.specs.model and "M3" not in self.specs.model
+                      and "Pro" not in self.specs.model and "Max" not in self.specs.model and "Ultra" not in self.specs.model)
 
-        if is_m1:
+        if is_m1_base:
             # M1-optimized settings: Lower resolution for 20 FPS target
             base_settings = {
                 "performance": {
